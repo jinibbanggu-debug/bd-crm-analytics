@@ -1,0 +1,1755 @@
+<script>
+
+var CURRENT_DAILY_TREND_ROWS = [];
+
+document.addEventListener('DOMContentLoaded', function () {
+  // 첫 화면 속도 개선:
+  // 페이지 진입 시에는 상단 요약 지표만 불러오고,
+  // 일자별 전환 흐름은 사용자가 [조회] 또는 [일자별 전환 흐름] 버튼을 눌렀을 때만 조회한다.
+  resetDailyTrendDate(false);
+  updateDailyTrendModeGuide();
+  loadDashboardSummary();
+});
+
+function loading(flag) {
+  document.body.classList.toggle('loading', flag);
+}
+
+function setStatus(message, type) {
+  var el = document.getElementById('status');
+
+  if (!el) return;
+
+  el.textContent = message || '';
+  el.className = 'status';
+
+  if (type) {
+    el.classList.add(type);
+  }
+}
+
+function setText(id, value) {
+  var el = document.getElementById(id);
+
+  if (el) {
+    el.textContent = value;
+  }
+}
+
+function failed(error) {
+  loading(false);
+
+  var message = error && error.message ? error.message : String(error);
+
+  setStatus('오류: ' + message, 'error');
+  alert(message);
+}
+
+function pickNumberValue(source, keys) {
+  if (!source) return null;
+
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
+      var num = parseNumber(source[key]);
+
+      if (num !== null) {
+        return num;
+      }
+    }
+  }
+
+  return null;
+}
+
+function pickTextValue(source, keys) {
+  if (!source) return '';
+
+  for (var i = 0; i < keys.length; i++) {
+    var key = keys[i];
+
+    if (source[key] !== undefined && source[key] !== null && source[key] !== '') {
+      return String(source[key]);
+    }
+  }
+
+  return '';
+}
+
+function normalizeSummaryData(data) {
+  data = data || {};
+
+  var normalized = {
+    member: pickNumberValue(data, ['member', 'memberCount', 'totalMember', 'totalMembers', '총 회원수', '총회원수']),
+    order: pickNumberValue(data, ['order', 'orderCount', 'totalOrder', 'totalOrders', '총 주문건수', '총주문건수']),
+    product: pickNumberValue(data, ['product', 'productCount', 'productTotal', '상품수', '관리 상품수', '관리상품수']),
+    repurchase: pickNumberValue(data, ['repurchase', 'repurchaseCount', 'repurchaseMemberCount', '재구매 회원수', '재구매회원수']),
+    crossSell: pickNumberValue(data, ['crossSell', 'crossSellCount', 'crossSellMemberCount', '추가구매 회원수', '추가구매회원수']),
+    aggregationPeriod: pickTextValue(data, ['aggregationPeriod', '집계기간', 'aggregationRange', 'orderDateRange']),
+    latestOrderDate: pickTextValue(data, ['latestOrderDate', 'latestOrder', '반영된 최신 주문일', '반영된최신주문일']),
+    lastImportedAt: pickTextValue(data, ['lastImportedAt', 'lastImportAt', '최종 DB 반영시간', '최종DB반영시간'])
+  };
+
+  normalized._hasAny = [
+    normalized.member,
+    normalized.order,
+    normalized.product,
+    normalized.repurchase,
+    normalized.crossSell
+  ].some(function (value) {
+    return value !== null && value !== undefined;
+  });
+
+  normalized.member = normalized.member || 0;
+  normalized.order = normalized.order || 0;
+  normalized.product = normalized.product || 0;
+  normalized.repurchase = normalized.repurchase || 0;
+  normalized.crossSell = normalized.crossSell || 0;
+
+  return normalized;
+}
+
+function previewRowsToMap(result) {
+  var map = {};
+  var rows = result && result.rows ? result.rows : [];
+
+  rows.slice(1).forEach(function (row) {
+    if (!row || row.length < 2) return;
+
+    var key = String(row[0] || '').trim();
+
+    if (!key) return;
+
+    map[key] = row[1];
+    map[key.replace(/\s/g, '')] = row[1];
+  });
+
+  return map;
+}
+
+function loadDashboardSummary(afterLoad) {
+  loading(true);
+  setStatus('상단 지표를 불러오는 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (data) {
+      var normalized = normalizeSummaryData(data);
+
+      if (normalized._hasAny) {
+        loading(false);
+        renderSummary(normalized);
+        setStatus('상단 지표 불러오기 완료', 'success');
+
+        if (typeof afterLoad === 'function') {
+          afterLoad();
+        }
+
+        return;
+      }
+
+      loadDashboardSummaryFromConfig(afterLoad);
+    })
+    .withFailureHandler(function () {
+      loadDashboardSummaryFromConfig(afterLoad);
+    })
+    .getDashboardInfo();
+}
+
+function loadDashboardSummaryFromConfig(afterLoad) {
+  google.script.run
+    .withSuccessHandler(function (configResult) {
+      var configMap = previewRowsToMap(configResult);
+      var normalized = normalizeSummaryData(configMap);
+
+      if (normalized._hasAny) {
+        loading(false);
+        renderSummary(normalized);
+        setStatus('상단 지표 불러오기 완료', 'success');
+
+        if (typeof afterLoad === 'function') {
+          afterLoad();
+        }
+
+        return;
+      }
+
+      loadDashboardSummaryFromDashboardSheet(afterLoad);
+    })
+    .withFailureHandler(function () {
+      loadDashboardSummaryFromDashboardSheet(afterLoad);
+    })
+    .getSheetPreview('CONFIG', 'CONFIG');
+}
+
+function loadDashboardSummaryFromDashboardSheet(afterLoad) {
+  google.script.run
+    .withSuccessHandler(function (dashboardResult) {
+      var dashboardMap = previewRowsToMap(dashboardResult);
+      var normalized = normalizeSummaryData(dashboardMap);
+
+      loading(false);
+      renderSummary(normalized);
+
+      if (normalized._hasAny) {
+        setStatus('상단 지표 불러오기 완료', 'success');
+      } else {
+        setStatus('상단 지표를 찾지 못했습니다. 전체 CRM 분석 실행 후 다시 조회해주세요.', 'error');
+      }
+
+      if (typeof afterLoad === 'function') {
+        afterLoad();
+      }
+    })
+    .withFailureHandler(function (error) {
+      loading(false);
+      failed(error);
+
+      if (typeof afterLoad === 'function') {
+        afterLoad();
+      }
+    })
+    .getSheetPreview('DASHBOARD', '전체 요약 리포트');
+}
+
+function formatNumber(value) {
+  if (value === null || value === undefined || value === '') return '';
+
+  var text = String(value).trim();
+
+  if (text.indexOf('%') > -1) return text;
+  if (text.match(/^\d{4}-\d{2}-\d{2}$/)) return text;
+  if (isNaN(Number(text.replace(/,/g, '')))) return text;
+
+  return Number(text.replace(/,/g, '')).toLocaleString('ko-KR');
+}
+
+function parseNumber(value) {
+  if (value === null || value === undefined || value === '') return null;
+
+  var text = String(value)
+    .replace(/,/g, '')
+    .replace(/%/g, '')
+    .replace(/％/g, '')
+    .trim();
+
+  if (text === '') return null;
+
+  var num = Number(text);
+
+  return isNaN(num) ? null : num;
+}
+
+function percentToNumber(value) {
+  var num = parseNumber(value);
+
+  if (num === null) return 0;
+
+  var text = String(value || '').trim();
+
+  if (text.indexOf('%') > -1 || text.indexOf('％') > -1) {
+    return num;
+  }
+
+  if (num > 0 && num <= 1) {
+    return num * 100;
+  }
+
+  return num;
+}
+
+function formatPercent(value) {
+  if (value === null || value === undefined || value === '') return '';
+
+  var text = String(value).trim();
+
+  if (text.indexOf('%') > -1 || text.indexOf('％') > -1) {
+    var percentTextNumber = parseNumber(text);
+
+    if (percentTextNumber === null) return '';
+
+    var percentRounded = Math.round(percentTextNumber * 10) / 10;
+
+    if (percentRounded % 1 === 0) {
+      return percentRounded + '%';
+    }
+
+    return percentRounded.toFixed(1) + '%';
+  }
+
+  var num = parseNumber(value);
+
+  if (num === null || isNaN(num)) return '';
+
+  var rounded = Math.round(num * 10) / 10;
+
+  if (rounded % 1 === 0) {
+    return rounded + '%';
+  }
+
+  return rounded.toFixed(1) + '%';
+}
+
+function normalizeHeader(value) {
+  return String(value || '')
+    .replace(/\s/g, '')
+    .replace(/[()（）\[\]％%]/g, '')
+    .toLowerCase();
+}
+
+function findHeaderIndex(header, candidates) {
+  if (!header || !header.length) return -1;
+
+  var normalizedCandidates = candidates.map(function (candidate) {
+    return normalizeHeader(candidate);
+  });
+
+  var i;
+  var j;
+  var h;
+
+  for (i = 0; i < header.length; i++) {
+    h = normalizeHeader(header[i]);
+
+    for (j = 0; j < normalizedCandidates.length; j++) {
+      if (h === normalizedCandidates[j]) {
+        return i;
+      }
+    }
+  }
+
+  for (i = 0; i < header.length; i++) {
+    h = normalizeHeader(header[i]);
+
+    for (j = 0; j < normalizedCandidates.length; j++) {
+      if (h.indexOf(normalizedCandidates[j]) > -1) {
+        return i;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function isPercentHeader(header) {
+  var h = normalizeHeader(header);
+
+  if (!h) return false;
+  if (h.indexOf('id') > -1) return false;
+
+  return (
+    h.indexOf('율') > -1 ||
+    h.indexOf('비중') > -1 ||
+    h.indexOf('rate') > -1 ||
+    h.indexOf('percent') > -1
+  );
+}
+
+function shouldFormatByHeader(header) {
+  var h = String(header || '').replace(/\s/g, '');
+
+  if (h.indexOf('ID') > -1) return false;
+
+  if (
+    h === '주문일' ||
+    h === '판정일' ||
+    h === '최초구매일' ||
+    h === '2차구매일' ||
+    h === '3차구매일' ||
+    h === '최종구매일' ||
+    h === '첫추가구매일' ||
+    h === '기준상품최초구매일' ||
+    h === '최초주문일' ||
+    h === '최종주문일' ||
+    h === '시작일' ||
+    h === '종료일' ||
+    h === '캠페인시작일' ||
+    h === '캠페인종료일' ||
+    h === '구간시작일' ||
+    h === '구간종료일'
+  ) {
+    return false;
+  }
+
+  var targets = [
+    '금액',
+    '수량',
+    '건수',
+    '고객수',
+    '주문수',
+    '구매횟수',
+    '소요일',
+    '경과일',
+    '전환고객수',
+    '미전환고객수',
+    '상품수',
+    '판정대상수',
+    '재구매수',
+    '추가구매수',
+    '이탈수',
+    '총회원',
+    '총주문',
+    '구매회원수',
+    '재구매회원수',
+    '추가구매회원수'
+  ];
+
+  return targets.some(function (word) {
+    return h.indexOf(word) > -1;
+  });
+}
+
+function formatCellValue(value, header) {
+  if (value === null || value === undefined || value === '') {
+    return '';
+  }
+
+  var headerText = String(header || '').replace(/\s/g, '');
+  var valueText = String(value).trim();
+
+  if (isPercentHeader(header)) {
+    return formatPercent(valueText);
+  }
+
+  if (headerText.indexOf('ID') > -1 || headerText.indexOf('아이디') > -1) {
+    return valueText;
+  }
+
+  if (
+    headerText === '주문일' ||
+    headerText === '판정일' ||
+    headerText === '최초구매일' ||
+    headerText === '2차구매일' ||
+    headerText === '3차구매일' ||
+    headerText === '최종구매일' ||
+    headerText === '첫추가구매일' ||
+    headerText === '기준상품최초구매일' ||
+    headerText === '최초주문일' ||
+    headerText === '최종주문일' ||
+    headerText === '시작일' ||
+    headerText === '종료일' ||
+    headerText === '캠페인시작일' ||
+    headerText === '캠페인종료일' ||
+    headerText === '구간시작일' ||
+    headerText === '구간종료일'
+  ) {
+    return valueText;
+  }
+
+  if (valueText.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    return valueText;
+  }
+
+  if (valueText.indexOf('%') > -1 || valueText.indexOf('％') > -1) {
+    return formatPercent(valueText);
+  }
+
+  var plainNumber = valueText.replace(/,/g, '');
+
+  if (plainNumber !== '' && !isNaN(Number(plainNumber))) {
+    return Number(plainNumber).toLocaleString('ko-KR');
+  }
+
+  if (shouldFormatByHeader(header)) {
+    return formatNumber(valueText);
+  }
+
+  return valueText;
+}
+
+function renderSummary(data) {
+  if (!data) {
+    setStatus('대시보드 데이터를 불러오지 못했습니다.', 'error');
+    return;
+  }
+
+  document.getElementById('memberCount').textContent = formatNumber(data.member);
+  document.getElementById('orderCount').textContent = formatNumber(data.order);
+  document.getElementById('productCount').textContent = formatNumber(data.product);
+  document.getElementById('repurchaseCount').textContent = formatNumber(data.repurchase);
+  document.getElementById('crossSellCount').textContent = formatNumber(data.crossSell);
+
+  setText(
+    'lastImportedAtText',
+    data.lastImportedAt
+      ? '최종 DB 반영시간: ' + data.lastImportedAt
+      : '최종 DB 반영시간: -'
+  );
+
+  var aggregationPeriodText = data.aggregationPeriod || data.latestOrderDate || '';
+
+  setText(
+    'aggregationPeriodText',
+    aggregationPeriodText
+      ? '집계기간: ' + aggregationPeriodText
+      : '집계기간: -'
+  );
+
+  // 기존 index.html 호환용
+  setText(
+    'latestOrderDateText',
+    aggregationPeriodText
+      ? '집계기간: ' + aggregationPeriodText
+      : '집계기간: -'
+  );
+}
+
+function reload() {
+  loadDashboardSummary();
+}
+
+function importUploadData() {
+  if (!confirm('원본_업로드 데이터를 원본_DB에 반영할까요?\n반영 후 원본_업로드의 데이터 행은 비워집니다.')) {
+    return;
+  }
+
+  loading(true);
+  setStatus('원본 데이터를 반영 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+
+      if (result && result.dashboard) {
+        renderSummary(normalizeSummaryData(result.dashboard));
+      }
+
+      setStatus(result && result.message ? result.message : '원본 데이터 반영 완료', 'success');
+      alert(
+        (result && result.message ? result.message : '원본 데이터 반영 완료') +
+        '\n\n새 데이터 반영 후에는 [전체 CRM 분석 실행]을 한 번 눌러야 통계 결과가 최신화됩니다.'
+      );
+    })
+    .withFailureHandler(failed)
+    .importUploadedOrders();
+}
+
+function runAll() {
+  if (!confirm('전체 CRM 분석을 실행할까요?\n데이터가 많을수록 시간이 걸릴 수 있습니다.')) {
+    return;
+  }
+
+  loading(true);
+  setStatus('전체 CRM 분석을 실행 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (data) {
+      loading(false);
+      renderSummary(normalizeSummaryData(data));
+      setStatus('전체 CRM 분석 완료', 'success');
+      alert('전체 CRM 분석이 완료되었습니다.\n상품별 재구매/추가구매 통계와 일자별 전환 흐름이 최신화되었습니다.');
+      setStatus('전체 CRM 분석 완료 · 일자별 전환 흐름은 필요 시 조회 버튼으로 확인해주세요.', 'success');
+    })
+    .withFailureHandler(failed)
+    .runBDCRM();
+}
+
+function previewOnly(outputKey, title, doneMessage, chartType) {
+  loading(true);
+  setStatus('결과를 불러오는 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+
+      result = result || {};
+      result.chartType = chartType || '';
+
+      renderResult(result);
+
+      if (!result.rows || result.rows.length <= 1) {
+        setStatus('조회 결과가 없습니다. 먼저 필요한 분석을 진행해주세요.', 'error');
+      } else {
+        setStatus(doneMessage || '조회 완료', 'success');
+      }
+    })
+    .withFailureHandler(failed)
+    .getSheetPreview(outputKey, title);
+}
+
+function productSummary() {
+  previewOnly(
+    'PRODUCT_SUMMARY',
+    '상품별 통합 통계',
+    '상품별 통합 통계 조회 완료',
+    ''
+  );
+}
+
+function productTransitionMatrix() {
+  previewOnly(
+    'CROSS_SELL_MATRIX',
+    '상품 이동 전환 Matrix',
+    '상품 이동 전환 Matrix 조회 완료',
+    'crossSellMatrix'
+  );
+}
+
+function showDailyTrend() {
+  var chartBox = document.getElementById('chartBox');
+
+  if (chartBox) {
+    chartBox.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  dailyConversionTrend();
+}
+
+function dailyConversionTrend() {
+  var startDate = getInputValue('dailyTrendStartDate');
+  var endDate = getInputValue('dailyTrendEndDate');
+  var mode = getInputValue('dailyTrendMode') || 'PURCHASE_DATE';
+
+  updateDailyTrendModeGuide();
+
+  loading(true);
+  setStatus('일자별 고객 흐름을 불러오는 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+
+      result = result || {};
+      result.chartType = 'dailyOutcomeTrend';
+      result.mode = result.mode || mode;
+
+      renderResult(result);
+
+      if (!result.rows || result.rows.length <= 1) {
+        setStatus('선택한 기간에 표시할 데이터가 없습니다.', 'error');
+      } else {
+        setStatus('일자별 고객 흐름 조회 완료', 'success');
+      }
+    })
+    .withFailureHandler(failed)
+    .getDailyConversionTrendPreview(startDate, endDate, mode);
+}
+
+function updateDailyTrendModeGuide() {
+  var mode = getInputValue('dailyTrendMode') || 'PURCHASE_DATE';
+  var guide = document.getElementById('dailyTrendModeGuide');
+  var description = document.getElementById('chartDescription');
+
+  if (mode === 'DUE_DATE') {
+    if (guide) {
+      guide.textContent = '재구매 도래일 기준: 해당 일자가 재구매 대상 시점인 고객/상품을 기준으로 재구매완료/추가구매만/미구매/판정대기를 확인합니다.';
+    }
+
+    if (description) {
+      description.textContent = '기존 구매일 + 상품별 기준일수로 계산한 재구매 도래일 기준 흐름입니다.';
+    }
+
+    return;
+  }
+
+  if (guide) {
+    guide.textContent = '구매일 기준: 해당 일자에 실제 구매한 고객을 첫구매/재구매만/추가구매만/재구매+추가구매로 분류합니다.';
+  }
+
+  if (description) {
+    description.textContent = '실제 주문일 기준으로 그날의 고객 구매유형을 확인합니다.';
+  }
+}
+
+function dashboard() {
+  previewOnly(
+    'DASHBOARD',
+    '전체 요약 리포트',
+    '전체 요약 리포트 조회 완료',
+    ''
+  );
+}
+
+function customerSummary() {
+  var input = document.getElementById('customerSearchId');
+  var customerId = input ? input.value.trim() : '';
+
+  if (!customerId) {
+    alert('고객ID를 입력해주세요.');
+    return;
+  }
+
+  loading(true);
+  setStatus('고객별 구매 내역을 조회 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+      renderResult(result);
+      setStatus('고객별 구매 내역 조회 완료', 'success');
+    })
+    .withFailureHandler(failed)
+    .searchCustomerSummaryById(customerId);
+}
+
+function customerProduct() {
+  var input = document.getElementById('customerSearchId');
+  var customerId = input ? input.value.trim() : '';
+
+  if (!customerId) {
+    alert('고객ID를 입력해주세요.');
+    return;
+  }
+
+  loading(true);
+  setStatus('고객×상품 구매 내역을 조회 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+      renderResult(result);
+      setStatus('고객×상품 구매 내역 조회 완료', 'success');
+    })
+    .withFailureHandler(failed)
+    .searchCustomerProductById(customerId);
+}
+
+function repurchaseDetail() {
+  var productEl = document.getElementById('repurchaseProduct');
+  var daysEl = document.getElementById('repurchaseMinDays');
+
+  var productName = productEl ? productEl.value : '';
+  var minDays = daysEl ? daysEl.value : '';
+
+  loading(true);
+
+  var message = '재구매 대상자를 조회 중입니다...';
+
+  if (productName) {
+    message += ' 상품: ' + productName;
+  }
+
+  if (minDays !== '') {
+    message += ' / 최종구매후 ' + minDays + '일 이상';
+  }
+
+  setStatus(message, '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+      renderResult(result);
+      setStatus('재구매 대상자 조회 완료', 'success');
+    })
+    .withFailureHandler(failed)
+    .runRepurchaseDetail(productName, minDays);
+}
+
+function crossSellDetail() {
+  var productEl = document.getElementById('crossSellProduct');
+  var productName = productEl ? productEl.value : '';
+
+  loading(true);
+
+  var message = '추가구매 대상자를 조회 중입니다...';
+
+  if (productName) {
+    message += ' 상품: ' + productName;
+  }
+
+  setStatus(message, '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+      renderResult(result);
+      setStatus('추가구매 대상자 조회 완료', 'success');
+    })
+    .withFailureHandler(failed)
+    .runCrossSellDetail(productName);
+}
+
+function saveCampaignFromForm() {
+  var campaign = {
+    campaignId: getInputValue('campaignId'),
+    round: getInputValue('campaignRound'),
+    name: getInputValue('campaignName'),
+    startDate: getInputValue('campaignStartDate'),
+    endDate: getInputValue('campaignEndDate'),
+    product: getInputValue('campaignProduct'),
+    goal: getInputValue('campaignGoal'),
+    comment: getInputValue('campaignComment')
+  };
+
+  if (!campaign.round) {
+    alert('차수를 입력해주세요.');
+    return;
+  }
+
+  if (!campaign.name) {
+    alert('캠페인명을 입력해주세요.');
+    return;
+  }
+
+  if (!campaign.startDate || !campaign.endDate) {
+    alert('시작일과 종료일을 입력해주세요.');
+    return;
+  }
+
+  loading(true);
+  setStatus('캠페인을 저장 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+
+      if (result && result.campaignId) {
+        setInputValue('campaignId', result.campaignId);
+      }
+
+      setStatus(result && result.message ? result.message : '캠페인 저장 완료', 'success');
+      alert(result && result.message ? result.message : '캠페인 저장 완료');
+
+      if (result && result.list) {
+        renderResult(result.list);
+      }
+    })
+    .withFailureHandler(failed)
+    .saveCampaign(campaign);
+}
+
+function loadCampaignList() {
+  loading(true);
+  setStatus('캠페인 목록을 불러오는 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+      renderResult(result);
+      setStatus('캠페인 목록 조회 완료', 'success');
+    })
+    .withFailureHandler(failed)
+    .getCampaignList();
+}
+
+function analyzeCampaignPerformance() {
+  if (!confirm('캠페인 성과 분석을 실행할까요?\n원본_DB 주문일 기준으로 캠페인 전·중·후 성과를 계산합니다.')) {
+    return;
+  }
+
+  loading(true);
+  setStatus('캠페인 성과를 분석 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+      renderResult(result);
+      setStatus('캠페인 성과 분석 완료', 'success');
+      alert('캠페인 성과 분석이 완료되었습니다.');
+    })
+    .withFailureHandler(failed)
+    .runCampaignPerformanceAnalysis();
+}
+
+function previewCampaignPerformance() {
+  loading(true);
+  setStatus('캠페인 성과를 불러오는 중입니다...', '');
+
+  google.script.run
+    .withSuccessHandler(function (result) {
+      loading(false);
+      renderResult(result);
+      setStatus('캠페인 성과 조회 완료', 'success');
+    })
+    .withFailureHandler(failed)
+    .getCampaignPerformancePreview();
+}
+
+function resetCampaignForm() {
+  setInputValue('campaignId', '');
+  setInputValue('campaignRound', '');
+  setInputValue('campaignName', '');
+  setInputValue('campaignStartDate', '');
+  setInputValue('campaignEndDate', '');
+  setInputValue('campaignProduct', '전체');
+  setInputValue('campaignGoal', '');
+  setInputValue('campaignComment', '');
+
+  setStatus('캠페인 입력값을 초기화했습니다.', 'success');
+}
+
+function resetDailyTrendDate(shouldRun) {
+  var now = new Date();
+  var firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+
+  setInputValue('dailyTrendStartDate', toInputDate(firstDay));
+  setInputValue('dailyTrendEndDate', toInputDate(now));
+
+  if (shouldRun !== false) {
+    dailyConversionTrend();
+  }
+}
+
+function toInputDate(date) {
+  var yyyy = date.getFullYear();
+  var mm = String(date.getMonth() + 1).padStart(2, '0');
+  var dd = String(date.getDate()).padStart(2, '0');
+
+  return yyyy + '-' + mm + '-' + dd;
+}
+
+function getInputValue(id) {
+  var el = document.getElementById(id);
+
+  if (!el) return '';
+
+  return String(el.value || '').trim();
+}
+
+function setInputValue(id, value) {
+  var el = document.getElementById(id);
+
+  if (el) {
+    el.value = value || '';
+  }
+}
+
+function renderResult(result) {
+  var box = document.getElementById('resultBox');
+  var title = document.getElementById('resultTitle');
+  var meta = document.getElementById('resultMeta');
+  var table = document.getElementById('resultTable');
+
+  if (!box || !title || !meta || !table) {
+    alert('결과 영역을 찾을 수 없습니다. index.html을 확인해주세요.');
+    return;
+  }
+
+  if (result && result.chartType === 'dailyOutcomeTrend') {
+    box.classList.add('hidden');
+    renderResultTopSummary(null);
+    renderChart(result);
+    return;
+  }
+
+  box.classList.remove('hidden');
+
+  if (!result) {
+    title.textContent = '조회 결과 없음';
+    meta.textContent = '';
+    table.innerHTML = '<tr><td>결과 데이터가 없습니다.</td></tr>';
+    renderResultTopSummary(null);
+    renderChart(null);
+    return;
+  }
+
+  title.textContent = result.title || '조회 결과';
+
+  if (result.truncated) {
+    meta.textContent =
+      '총 ' +
+      formatNumber(result.total) +
+      '건 중 화면에는 ' +
+      formatNumber(result.shown) +
+      '건만 표시됩니다.';
+  } else {
+    meta.textContent = '총 ' + formatNumber(result.total) + '건 조회';
+  }
+
+  renderResultTopSummary(result);
+  renderChart(result);
+
+  table.innerHTML = '';
+
+  var rows = result.rows || [];
+
+  if (!rows.length) {
+    table.innerHTML = '<tr><td>조회 결과가 없습니다.</td></tr>';
+    return;
+  }
+
+  var headerRow = rows[0] || [];
+
+  rows.forEach(function (row, rowIndex) {
+    var tr = document.createElement('tr');
+
+    row.forEach(function (cell, colIndex) {
+      var td = document.createElement(rowIndex === 0 ? 'th' : 'td');
+
+      if (rowIndex === 0) {
+        td.textContent = cell;
+      } else {
+        td.textContent = formatCellValue(cell, headerRow[colIndex]);
+      }
+
+      tr.appendChild(td);
+    });
+
+    table.appendChild(tr);
+  });
+}
+
+function ensureResultTopSummaryBox() {
+  var box = document.getElementById('resultTopSummaryBox');
+
+  if (box) return box;
+
+  var resultMeta = document.getElementById('resultMeta');
+
+  if (!resultMeta || !resultMeta.parentNode) return null;
+
+  box = document.createElement('div');
+  box.id = 'resultTopSummaryBox';
+  box.className = 'result-top-summary-box hidden';
+
+  resultMeta.parentNode.insertBefore(box, resultMeta.nextSibling);
+
+  return box;
+}
+
+function renderResultTopSummary(result) {
+  var box = ensureResultTopSummaryBox();
+
+  if (!box) return;
+
+  box.innerHTML = '';
+
+  if (!result) {
+    box.classList.add('hidden');
+    return;
+  }
+
+  var title = result.title || '';
+
+  var shouldShowSummary =
+    result.summary ||
+    title.indexOf('대상자') > -1 ||
+    title.indexOf('상세') > -1 ||
+    title.indexOf('고객별') > -1 ||
+    title.indexOf('고객×상품') > -1;
+
+  if (!shouldShowSummary) {
+    box.classList.add('hidden');
+    return;
+  }
+
+  box.classList.remove('hidden');
+
+  var table = document.createElement('table');
+  table.className = 'result-summary-table';
+
+  var tbody = document.createElement('tbody');
+
+  addSummaryRow(tbody, '전체 결과 건수', formatNumber(result.total) + '건');
+  addSummaryRow(tbody, '현재 화면 표시', formatNumber(result.shown || result.total || 0) + '건');
+
+  if (result.limit) {
+    addSummaryRow(tbody, '화면 표시 제한', formatNumber(result.limit) + '건');
+  }
+
+  if (result.summary) {
+    addSummaryRow(tbody, '기준상품', result.summary.baseProduct);
+    addSummaryRow(tbody, '기준상품 구매고객', formatNumber(result.summary.baseBuyerCount) + '명');
+    addSummaryRow(tbody, '추가구매 전환', formatNumber(result.summary.convertedCount) + '명');
+    addSummaryRow(tbody, '추가구매 전환율', formatPercent(result.summary.conversionRate));
+    addSummaryRow(tbody, '미전환', formatNumber(result.summary.nonConvertedCount) + '건');
+
+    if (result.summary.items && result.summary.items.length) {
+      result.summary.items.forEach(function (item) {
+        addSummaryRow(tbody, '추가구매 상품 - ' + item.product, formatNumber(item.count) + '건');
+      });
+    }
+  }
+
+  table.appendChild(tbody);
+  box.appendChild(table);
+}
+
+function addSummaryRow(tbody, label, value) {
+  var tr = document.createElement('tr');
+
+  var th = document.createElement('th');
+  th.textContent = label;
+
+  var td = document.createElement('td');
+  td.textContent = value === null || value === undefined ? '' : value;
+
+  tr.appendChild(th);
+  tr.appendChild(td);
+
+  tbody.appendChild(tr);
+}
+
+function renderChart(result) {
+  var chartBox = document.getElementById('chartBox');
+  var chartTitle = document.getElementById('chartTitle');
+  var chartDescription = document.getElementById('chartDescription');
+  var chartContent = document.getElementById('chartContent');
+  var chartNote = document.getElementById('chartNote');
+  var dailyTrendControls = document.getElementById('dailyTrendControls');
+
+  if (!chartBox || !chartTitle || !chartContent) return;
+
+  if (dailyTrendControls) {
+    dailyTrendControls.classList.toggle('hidden', !(result && result.chartType === 'dailyOutcomeTrend'));
+  }
+
+  chartContent.innerHTML = '';
+
+  if (chartNote) {
+    chartNote.textContent = '';
+    chartNote.classList.add('hidden');
+  }
+
+  if (!result || !result.chartType) {
+    chartBox.classList.add('hidden');
+    return;
+  }
+
+  var rows = result.rows || [];
+
+  if (rows.length <= 1) {
+    chartTitle.textContent = result.title || '차트';
+    if (chartDescription) {
+      chartDescription.textContent = '선택한 기간에 표시할 데이터가 없습니다.';
+    }
+    chartBox.classList.remove('hidden');
+    return;
+  }
+
+  if (result.chartType === 'repurchaseRate') {
+    chartTitle.textContent = '상품별 재구매율 차트';
+    if (chartDescription) {
+      chartDescription.textContent = '구매고객수가 많은 상품 순서로 재구매율을 표시합니다.';
+    }
+
+    renderBarChart(
+      chartContent,
+      rows,
+      '상품',
+      '재구매율',
+      '재구매율',
+      true
+    );
+
+    chartBox.classList.remove('hidden');
+    return;
+  }
+
+  if (result.chartType === 'crossSellRate') {
+    chartTitle.textContent = '상품별 추가구매 통계 차트';
+    if (chartDescription) {
+      chartDescription.textContent = '기준상품 구매고객이 많은 순서로 추가구매 전환율을 표시합니다.';
+    }
+
+    renderBarChart(
+      chartContent,
+      rows,
+      '기준상품',
+      '추가구매 전환율',
+      '전환율',
+      true
+    );
+
+    chartBox.classList.remove('hidden');
+    return;
+  }
+
+  if (result.chartType === 'crossSellMatrix') {
+    chartTitle.textContent = '상품 이동 전환 Matrix 차트';
+    if (chartDescription) {
+      chartDescription.textContent = '기준상품 구매 이후 발생한 추가구매 상품 전환을 단방향으로 표시합니다.';
+    }
+
+    renderBarChart(
+      chartContent,
+      rows,
+      '전환경로',
+      '전환고객수',
+      '전환고객수',
+      true
+    );
+
+    chartBox.classList.remove('hidden');
+    return;
+  }
+
+  if (result.chartType === 'dailyOutcomeTrend') {
+    chartTitle.textContent = result.title || '일자별 고객 흐름';
+    if (chartDescription) {
+      chartDescription.textContent =
+        (result.startDate || '') +
+        ' ~ ' +
+        (result.endDate || '') +
+        ' 기준 조회 결과입니다.';
+    }
+
+    CURRENT_DAILY_TREND_ROWS = rows;
+    renderDailyOutcomeLineChart(chartContent, rows);
+
+    if (chartNote) {
+      chartNote.textContent = result.note || '';
+      chartNote.classList.remove('hidden');
+    }
+
+    chartBox.classList.remove('hidden');
+    return;
+  }
+
+  chartBox.classList.add('hidden');
+}
+
+function renderBarChart(container, rows, labelHeader, valueHeader, valueLabel, keepRowOrder) {
+  var header = rows[0];
+
+  var labelIndex = findHeaderIndex(header, [labelHeader]);
+
+  var valueIndex = findHeaderIndex(header, [
+    valueHeader,
+    valueLabel,
+    valueHeader + '%',
+    valueLabel + '%'
+  ]);
+
+  if (valueIndex < 0 && valueLabel === '전환율') {
+    valueIndex = findHeaderIndex(header, [
+      '추가구매 전환율',
+      '추가구매전환율',
+      '추가구매율',
+      '전환율'
+    ]);
+  }
+
+  if (labelIndex < 0 || valueIndex < 0) return;
+
+  var isRateChart = isPercentHeader(header[valueIndex]);
+
+  var data = rows.slice(1)
+    .map(function (row) {
+      var chartValue = isRateChart ? percentToNumber(row[valueIndex]) : (parseNumber(row[valueIndex]) || 0);
+
+      return {
+        label: row[labelIndex],
+        value: chartValue,
+        raw: isRateChart ? formatPercent(row[valueIndex]) : formatNumber(row[valueIndex])
+      };
+    });
+
+  if (!keepRowOrder) {
+    data.sort(function (a, b) {
+      return b.value - a.value;
+    });
+  }
+
+  var max = data.reduce(function (m, item) {
+    return Math.max(m, item.value);
+  }, 0);
+
+  data.forEach(function (item) {
+    appendChartRow(container, item.label, item.value, item.raw, max, false);
+  });
+}
+
+function appendChartRow(container, labelText, valueNumber, valueText, max, wide) {
+  var row = document.createElement('div');
+  row.className = 'chart-row';
+
+  var label = document.createElement('div');
+  label.className = wide ? 'chart-label wide' : 'chart-label';
+  label.textContent = labelText;
+
+  var barWrap = document.createElement('div');
+  barWrap.className = 'chart-bar-wrap';
+
+  var bar = document.createElement('div');
+  bar.className = 'chart-bar';
+  bar.style.width = max ? ((valueNumber / max) * 100) + '%' : '0%';
+
+  var value = document.createElement('div');
+  value.className = 'chart-value';
+  value.textContent = valueText;
+
+  barWrap.appendChild(bar);
+
+  row.appendChild(label);
+  row.appendChild(barWrap);
+  row.appendChild(value);
+
+  container.appendChild(row);
+}
+
+function getLineColor(key) {
+  var colors = {
+    firstPurchaseRate: '#64748b',
+    repurchaseOnlyRate: '#2563eb',
+    crossSellOnlyRate: '#16a34a',
+    repurchaseAndCrossSellRate: '#7c3aed',
+    repurchaseRate: '#2563eb',
+    crossSellRate: '#16a34a',
+    churnRate: '#dc2626',
+    pendingRate: '#f59e0b'
+  };
+
+  return colors[key] || '#0f172a';
+}
+
+function renderDailyOutcomeLineChart(container, rows) {
+  var header = rows[0] || [];
+
+  var dateIndex = findHeaderIndex(header, ['구매일', '판정일', '일자', '날짜']);
+  var purchaseTargetIndex = findHeaderIndex(header, ['구매고객수']);
+  var dueTargetIndex = findHeaderIndex(header, ['판정완료대상수', '판정대상수']);
+
+  var isPurchaseDateMode = purchaseTargetIndex > -1;
+  var targetIndex = isPurchaseDateMode ? purchaseTargetIndex : dueTargetIndex;
+  var targetLabel = isPurchaseDateMode ? '구매고객' : '판정대상';
+
+  var seriesDefs = isPurchaseDateMode
+    ? [
+        {
+          key: 'firstPurchaseRate',
+          label: '첫구매율',
+          index: findHeaderIndex(header, ['첫구매율'])
+        },
+        {
+          key: 'repurchaseOnlyRate',
+          label: '재구매만율',
+          index: findHeaderIndex(header, ['재구매만율'])
+        },
+        {
+          key: 'crossSellOnlyRate',
+          label: '추가구매만율',
+          index: findHeaderIndex(header, ['추가구매만율'])
+        },
+        {
+          key: 'repurchaseAndCrossSellRate',
+          label: '재구매+추가구매율',
+          index: findHeaderIndex(header, ['재구매+추가구매율', '재구매추가구매율'])
+        }
+      ]
+    : [
+        {
+          key: 'repurchaseRate',
+          label: '재구매율',
+          index: findHeaderIndex(header, ['재구매율'])
+        },
+        {
+          key: 'crossSellRate',
+          label: '추가구매율',
+          index: findHeaderIndex(header, ['추가구매율'])
+        },
+        {
+          key: 'churnRate',
+          label: '미구매율',
+          index: findHeaderIndex(header, ['미구매율', '이탈률'])
+        },
+        {
+          key: 'pendingRate',
+          label: '판정대기율',
+          index: findHeaderIndex(header, ['판정대기율'])
+        }
+      ];
+
+  seriesDefs = seriesDefs.filter(function (series) {
+    return series.index > -1;
+  });
+
+  if (dateIndex < 0 || !seriesDefs.length) {
+    container.innerHTML = '<p>차트에 필요한 컬럼을 찾을 수 없습니다.</p>';
+    return;
+  }
+
+  var data = rows.slice(1)
+    .map(function (row) {
+      var item = {
+        date: row[dateIndex],
+        targetCount: targetIndex > -1 ? parseNumber(row[targetIndex]) || 0 : 0,
+        targetLabel: targetLabel
+      };
+
+      seriesDefs.forEach(function (series) {
+        item[series.key] = percentToNumber(row[series.index]);
+      });
+
+      return item;
+    })
+    .filter(function (item) {
+      return item.date;
+    });
+
+  if (!data.length) {
+    container.innerHTML = '<p>선택한 기간에 표시할 데이터가 없습니다.</p>';
+    return;
+  }
+
+  var wrapper = document.createElement('div');
+  wrapper.className = 'line-chart-wrapper';
+  wrapper.style.width = '100%';
+  wrapper.style.overflowX = 'auto';
+
+  var minWidth = Math.max(760, data.length * 42);
+  var width = minWidth;
+  var height = 360;
+  var padding = {
+    top: 28,
+    right: 42,
+    bottom: 64,
+    left: 54
+  };
+
+  var plotWidth = width - padding.left - padding.right;
+  var plotHeight = height - padding.top - padding.bottom;
+
+  var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', width);
+  svg.setAttribute('height', height);
+  svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+  svg.setAttribute('role', 'img');
+  svg.setAttribute('aria-label', '일자별 고객 흐름');
+
+  var maxValue = 100;
+
+  function xScale(index) {
+    if (data.length === 1) {
+      return padding.left + plotWidth / 2;
+    }
+
+    return padding.left + (index / (data.length - 1)) * plotWidth;
+  }
+
+  function yScale(value) {
+    return padding.top + plotHeight - (value / maxValue) * plotHeight;
+  }
+
+  appendGrid(svg, width, height, padding, plotWidth, plotHeight, yScale);
+  appendAxisLabels(svg, width, height, padding, data, xScale);
+
+  seriesDefs.forEach(function (series) {
+    appendLineSeries(svg, data, series.key, xScale, yScale, series.label);
+  });
+
+  wrapper.appendChild(svg);
+
+  var legend = document.createElement('div');
+  legend.className = 'line-chart-legend';
+
+  seriesDefs.forEach(function (series) {
+    legend.appendChild(makeLegendItem(series.label, getLineColor(series.key)));
+  });
+
+  var summary = document.createElement('div');
+  summary.className = 'line-chart-summary';
+
+  var totalTarget = data.reduce(function (sum, item) {
+    return sum + Number(item.targetCount || 0);
+  }, 0);
+
+  summary.textContent =
+    '선택 기간 ' +
+    targetLabel +
+    ' ' +
+    formatNumber(totalTarget) +
+    '건 / 그래프는 날짜별 비율을 표시합니다. 정확한 수치는 아래 상세 데이터에서 확인할 수 있습니다.';
+
+  container.appendChild(wrapper);
+  container.appendChild(legend);
+  container.appendChild(summary);
+
+  appendDailyOutcomeDataTable(container, rows);
+}
+
+function appendDailyOutcomeDataTable(container, rows) {
+  var dataBox = document.createElement('div');
+  dataBox.style.marginTop = '18px';
+  dataBox.style.paddingTop = '14px';
+  dataBox.style.borderTop = '1px solid #edf2f7';
+
+  var headerArea = document.createElement('div');
+  headerArea.style.display = 'flex';
+  headerArea.style.justifyContent = 'space-between';
+  headerArea.style.alignItems = 'center';
+  headerArea.style.gap = '12px';
+  headerArea.style.marginBottom = '10px';
+
+  var title = document.createElement('div');
+  title.innerHTML = '<strong>일자별 상세 데이터</strong><br><span style="color:#60758a;font-size:12px;">그래프에 반영된 일자별 대상수와 비율입니다.</span>';
+
+  var downloadButton = document.createElement('button');
+  downloadButton.className = 'small';
+  downloadButton.textContent = '상세 CSV 다운로드';
+  downloadButton.onclick = function () {
+    downloadDailyTrendCsv();
+  };
+
+  headerArea.appendChild(title);
+  headerArea.appendChild(downloadButton);
+
+  var tableWrap = document.createElement('div');
+  tableWrap.className = 'table-wrap';
+
+  var table = document.createElement('table');
+  table.style.minWidth = '760px';
+
+  rows.forEach(function (row, rowIndex) {
+    var tr = document.createElement('tr');
+
+    row.forEach(function (cell, colIndex) {
+      var tag = rowIndex === 0 ? 'th' : 'td';
+      var td = document.createElement(tag);
+      var header = rows[0] ? rows[0][colIndex] : '';
+
+      td.textContent = rowIndex === 0 ? cell : formatCellValue(cell, header);
+      tr.appendChild(td);
+    });
+
+    table.appendChild(tr);
+  });
+
+  tableWrap.appendChild(table);
+  dataBox.appendChild(headerArea);
+  dataBox.appendChild(tableWrap);
+  container.appendChild(dataBox);
+}
+
+function downloadDailyTrendCsv() {
+  var rows = CURRENT_DAILY_TREND_ROWS || [];
+
+  if (!rows.length) {
+    alert('다운로드할 일자별 전환 흐름 데이터가 없습니다.');
+    return;
+  }
+
+  var csvRows = rows.map(function (row) {
+    return row.map(function (cell) {
+      return escapeCsv(cell);
+    }).join(',');
+  });
+
+  var startDate = getInputValue('dailyTrendStartDate') || 'start';
+  var endDate = getInputValue('dailyTrendEndDate') || 'end';
+  var filename = '일자별_고객_흐름_' + startDate + '_' + endDate + '.csv';
+
+  var blob = new Blob(['\ufeff' + csvRows.join('\n')], {
+    type: 'text/csv;charset=utf-8;'
+  });
+
+  var url = URL.createObjectURL(blob);
+  var link = document.createElement('a');
+
+  link.href = url;
+  link.download = sanitizeFilename(filename);
+  link.style.display = 'none';
+
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  URL.revokeObjectURL(url);
+}
+
+function appendGrid(svg, width, height, padding, plotWidth, plotHeight, yScale) {
+  var gridValues = [0, 25, 50, 75, 100];
+
+  gridValues.forEach(function (value) {
+    var y = yScale(value);
+
+    var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', padding.left);
+    line.setAttribute('x2', padding.left + plotWidth);
+    line.setAttribute('y1', y);
+    line.setAttribute('y2', y);
+    line.setAttribute('stroke', '#e5e7eb');
+    line.setAttribute('stroke-width', '1');
+
+    svg.appendChild(line);
+
+    var label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    label.setAttribute('x', padding.left - 12);
+    label.setAttribute('y', y + 4);
+    label.setAttribute('text-anchor', 'end');
+    label.setAttribute('font-size', '11');
+    label.setAttribute('fill', '#64748b');
+    label.textContent = value + '%';
+
+    svg.appendChild(label);
+  });
+
+  var axisX = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  axisX.setAttribute('x1', padding.left);
+  axisX.setAttribute('x2', padding.left + plotWidth);
+  axisX.setAttribute('y1', padding.top + plotHeight);
+  axisX.setAttribute('y2', padding.top + plotHeight);
+  axisX.setAttribute('stroke', '#cbd5e1');
+  axisX.setAttribute('stroke-width', '1');
+
+  svg.appendChild(axisX);
+
+  var axisY = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  axisY.setAttribute('x1', padding.left);
+  axisY.setAttribute('x2', padding.left);
+  axisY.setAttribute('y1', padding.top);
+  axisY.setAttribute('y2', padding.top + plotHeight);
+  axisY.setAttribute('stroke', '#cbd5e1');
+  axisY.setAttribute('stroke-width', '1');
+
+  svg.appendChild(axisY);
+}
+
+function appendAxisLabels(svg, width, height, padding, data, xScale) {
+  var maxLabels = 8;
+  var interval = Math.max(1, Math.ceil(data.length / maxLabels));
+
+  data.forEach(function (item, index) {
+    if (index % interval !== 0 && index !== data.length - 1) {
+      return;
+    }
+
+    var x = xScale(index);
+    var y = height - padding.bottom + 22;
+
+    var text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    text.setAttribute('x', x);
+    text.setAttribute('y', y);
+    text.setAttribute('text-anchor', 'middle');
+    text.setAttribute('font-size', '11');
+    text.setAttribute('fill', '#64748b');
+    text.textContent = compactDateLabel(item.date);
+
+    svg.appendChild(text);
+  });
+}
+
+function appendLineSeries(svg, data, key, xScale, yScale, labelText) {
+  var color = getLineColor(key);
+
+  var points = data.map(function (item, index) {
+    return xScale(index) + ',' + yScale(item[key] || 0);
+  }).join(' ');
+
+  var polyline = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+  polyline.setAttribute('points', points);
+  polyline.setAttribute('fill', 'none');
+  polyline.setAttribute('stroke', color);
+  polyline.setAttribute('stroke-width', '2.8');
+  polyline.setAttribute('stroke-linecap', 'round');
+  polyline.setAttribute('stroke-linejoin', 'round');
+
+  svg.appendChild(polyline);
+
+  data.forEach(function (item, index) {
+    var cx = xScale(index);
+    var cy = yScale(item[key] || 0);
+
+    var circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    circle.setAttribute('cx', cx);
+    circle.setAttribute('cy', cy);
+    circle.setAttribute('r', '4');
+    circle.setAttribute('fill', color);
+    circle.setAttribute('stroke', '#ffffff');
+    circle.setAttribute('stroke-width', '1.5');
+
+    var title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+    title.textContent =
+      item.date +
+      ' / ' +
+      labelText +
+      ' ' +
+      formatPercent(item[key]) +
+      ' / ' +
+      (item.targetLabel || '대상') +
+      ' ' +
+      formatNumber(item.targetCount) +
+      '건';
+
+    circle.appendChild(title);
+    svg.appendChild(circle);
+  });
+}
+
+function makeLegendItem(labelText, color) {
+  var item = document.createElement('span');
+  item.style.display = 'inline-flex';
+  item.style.alignItems = 'center';
+  item.style.gap = '6px';
+  item.style.color = '#0f172a';
+
+  var dot = document.createElement('span');
+  dot.style.width = '10px';
+  dot.style.height = '10px';
+  dot.style.borderRadius = '50%';
+  dot.style.backgroundColor = color;
+  dot.style.display = 'inline-block';
+
+  var text = document.createElement('span');
+  text.textContent = labelText;
+
+  item.appendChild(dot);
+  item.appendChild(text);
+
+  return item;
+}
+
+function compactDateLabel(value) {
+  var text = String(value || '');
+
+  if (text.match(/^\d{4}-\d{2}-\d{2}$/)) {
+    var parts = text.split('-');
+    return Number(parts[1]) + '/' + Number(parts[2]);
+  }
+
+  return text;
+}
+
+function downloadCurrentResultCsv() {
+  var table = document.getElementById('resultTable');
+  var titleEl = document.getElementById('resultTitle');
+
+  if (!table) {
+    alert('다운로드할 결과표를 찾을 수 없습니다.');
+    return;
+  }
+
+  var rows = table.querySelectorAll('tr');
+
+  if (!rows.length) {
+    alert('다운로드할 결과가 없습니다.');
+    return;
+  }
+
+  var csvRows = [];
+
+  rows.forEach(function (tr) {
+    var cells = tr.querySelectorAll('th, td');
+    var values = [];
+
+    cells.forEach(function (cell) {
+      values.push(escapeCsv(cell.textContent));
+    });
+
+    csvRows.push(values.join(','));
+  });
+
+  var title = titleEl ? titleEl.textContent || 'BD_CRM_결과' : 'BD_CRM_결과';
+  var filename = sanitizeFilename(title) + '.csv';
+
+  var blob = new Blob(['\ufeff' + csvRows.join('\n')], {
+    type: 'text/csv;charset=utf-8;'
+  });
+
+  var url = URL.createObjectURL(blob);
+  var link = document.createElement('a');
+
+  link.href = url;
+  link.download = filename;
+  link.style.display = 'none';
+
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+
+  URL.revokeObjectURL(url);
+}
+
+function escapeCsv(value) {
+  var text = String(value === null || value === undefined ? '' : value);
+  return '"' + text.replace(/"/g, '""') + '"';
+}
+
+function sanitizeFilename(value) {
+  return String(value || 'BD_CRM_결과')
+    .replace(/[\\\/:*?"<>|]/g, '_')
+    .replace(/\s+/g, '_')
+    .trim();
+}
+
+</script>

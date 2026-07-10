@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="UTF-8">
+  <title>BD CRM v2.0</title>
+  <?!= include('css'); ?>
+</head>
+
+<body>
+  <div class="app">
+    <div class="layout">
+
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <h1>BD CRM v2.0</h1>
+          <p>원본 데이터 업로드 · 재구매 분석 · 추가구매 분석 · 일자별 전환 흐름 · 캠페인 성과 관리</p>
+          <div id="status" class="status">준비 중입니다.</div>
+        </div>
+
+        <section class="side-card">
+          <h2>운영 데이터</h2>
+          <p>원본 주문 데이터를 반영하고 CRM 분석을 실행합니다.</p>
+
+          <div class="button-grid">
+            <button class="primary" onclick="importUploadData()">원본 데이터 반영</button>
+            <button onclick="runAll()">전체 CRM 분석 실행</button>
+            <button onclick="reload()">새로고침</button>
+          </div>
+
+          <div class="guide-box">
+            <strong>사용 순서</strong>
+            <span>원본_업로드에 데이터 붙여넣기</span>
+            <span>→ 원본 데이터 반영</span>
+            <span>→ 전체 CRM 분석 실행</span>
+            <span id="lastImportedAtText">최종 DB 반영시간: -</span>
+            <span id="aggregationPeriodText">집계기간: -</span>
+          </div>
+        </section>
+
+        <section class="side-card">
+          <h2>통계 리포트</h2>
+          <p>상품별 통계와 전체 요약 결과를 확인합니다.</p>
+
+          <div class="button-grid">
+            <button onclick="productSummary()">상품별 통합 통계</button>
+            <button onclick="productTransitionMatrix()">상품 이동 전환 Matrix</button>
+            <button onclick="showDailyTrend()">일자별 전환 흐름</button>
+            <button onclick="dashboard()">전체 요약 리포트</button>
+          </div>
+        </section>
+
+        <section class="side-card">
+          <details open>
+            <summary>
+              <div class="side-summary">
+                <h2>CRM 대상자 조회</h2>
+                <span>접기/펼치기</span>
+              </div>
+            </summary>
+
+            <p>상품 기준으로 재구매/추가구매 대상자를 조회합니다.</p>
+
+            <div class="form-block">
+              <label for="repurchaseProduct">재구매 대상 상품</label>
+              <select id="repurchaseProduct">
+                <option value="">전체 상품</option>
+                <option value="애사비">애사비</option>
+                <option value="레몬즙">레몬즙</option>
+                <option value="올리브오일">올리브오일</option>
+                <option value="컬리케일">컬리케일</option>
+                <option value="알부민">알부민</option>
+                <option value="포스파티딜세린">포스파티딜세린</option>
+                <option value="쾌변습관">쾌변습관</option>
+                <option value="블랙마카">블랙마카</option>
+                <option value="침향송침유">침향송침유</option>
+                <option value="진생바이타">진생바이타</option>
+              </select>
+
+              <label for="repurchaseMinDays">최종 구매 후 경과일</label>
+              <input id="repurchaseMinDays" type="number" min="0" placeholder="예: 30">
+
+              <button onclick="repurchaseDetail()">재구매 대상자 조회</button>
+            </div>
+
+            <div class="form-block">
+              <label for="crossSellProduct">추가구매 기준 상품</label>
+              <select id="crossSellProduct">
+                <option value="">전체 상품</option>
+                <option value="애사비">애사비</option>
+                <option value="레몬즙">레몬즙</option>
+                <option value="올리브오일">올리브오일</option>
+                <option value="컬리케일">컬리케일</option>
+                <option value="알부민">알부민</option>
+                <option value="포스파티딜세린">포스파티딜세린</option>
+                <option value="쾌변습관">쾌변습관</option>
+                <option value="블랙마카">블랙마카</option>
+                <option value="침향송침유">침향송침유</option>
+                <option value="진생바이타">진생바이타</option>
+              </select>
+
+              <button onclick="crossSellDetail()">추가구매 대상자 조회</button>
+            </div>
+          </details>
+        </section>
+
+        <section class="side-card">
+          <details>
+            <summary>
+              <div class="side-summary">
+                <h2>고객 데이터 조회</h2>
+                <span>접기/펼치기</span>
+              </div>
+            </summary>
+
+            <p>고객ID를 입력하면 해당 고객의 구매 내역만 조회합니다.</p>
+
+            <div class="form-block">
+              <label for="customerSearchId">고객ID</label>
+              <input id="customerSearchId" type="text" placeholder="주문자ID 입력">
+
+              <div class="button-grid">
+                <button onclick="customerSummary()">고객별 구매 내역</button>
+                <button onclick="customerProduct()">고객×상품 구매 내역</button>
+              </div>
+            </div>
+          </details>
+        </section>
+
+        <section class="side-card">
+          <details>
+            <summary>
+              <div class="side-summary">
+                <h2>캠페인 관리</h2>
+                <span>접기/펼치기</span>
+              </div>
+            </summary>
+
+            <p>재구매/추가구매 캠페인 일정과 목표를 저장하고 성과를 비교합니다.</p>
+
+            <div class="form-block">
+              <input id="campaignId" type="hidden">
+
+              <label for="campaignRound">차수</label>
+              <input id="campaignRound" type="text" placeholder="예: 1차">
+
+              <label for="campaignName">캠페인명</label>
+              <input id="campaignName" type="text" placeholder="예: 재구매 리마인드 캠페인">
+
+              <label for="campaignStartDate">시작일</label>
+              <input id="campaignStartDate" type="date">
+
+              <label for="campaignEndDate">종료일</label>
+              <input id="campaignEndDate" type="date">
+
+              <label for="campaignProduct">대상상품</label>
+              <select id="campaignProduct">
+                <option value="전체">전체</option>
+                <option value="애사비">애사비</option>
+                <option value="레몬즙">레몬즙</option>
+                <option value="올리브오일">올리브오일</option>
+                <option value="컬리케일">컬리케일</option>
+                <option value="알부민">알부민</option>
+                <option value="포스파티딜세린">포스파티딜세린</option>
+                <option value="쾌변습관">쾌변습관</option>
+                <option value="블랙마카">블랙마카</option>
+                <option value="침향송침유">침향송침유</option>
+                <option value="진생바이타">진생바이타</option>
+              </select>
+
+              <label for="campaignGoal">목표</label>
+              <input id="campaignGoal" type="text" placeholder="예: 재구매율 15% 달성">
+
+              <label for="campaignComment">코멘트</label>
+              <input id="campaignComment" type="text" placeholder="예: 쿠폰/비밀링크 발송">
+
+              <div class="button-grid">
+                <button class="primary" onclick="saveCampaignFromForm()">캠페인 저장</button>
+                <button onclick="resetCampaignForm()">입력 초기화</button>
+                <button onclick="loadCampaignList()">캠페인 목록</button>
+                <button onclick="analyzeCampaignPerformance()">캠페인 성과 분석</button>
+                <button onclick="previewCampaignPerformance()">성과 조회</button>
+              </div>
+            </div>
+          </details>
+        </section>
+      </aside>
+
+      <main class="main">
+        <div class="main-header">
+          <div>
+            <h1>CRM 데이터 대시보드</h1>
+            <p>핵심 지표와 일자별 재구매/추가구매/이탈 흐름을 확인합니다.</p>
+          </div>
+        </div>
+
+        <section class="summary-grid">
+          <div class="summary-card">
+            <div class="summary-label">총 회원수</div>
+            <div id="memberCount" class="summary-value">-</div>
+          </div>
+
+          <div class="summary-card">
+            <div class="summary-label">총 주문건수</div>
+            <div id="orderCount" class="summary-value">-</div>
+          </div>
+
+          <div class="summary-card">
+            <div class="summary-label">관리 상품수</div>
+            <div id="productCount" class="summary-value">-</div>
+          </div>
+
+          <div class="summary-card">
+            <div class="summary-label">재구매 회원수</div>
+            <div id="repurchaseCount" class="summary-value">-</div>
+          </div>
+
+          <div class="summary-card">
+            <div class="summary-label">추가구매 회원수</div>
+            <div id="crossSellCount" class="summary-value">-</div>
+          </div>
+
+        </section>
+
+        <section id="chartBox" class="result-panel">
+          <div class="result-header">
+            <div>
+              <h2 id="chartTitle">일자별 전환 흐름</h2>
+              <p id="chartDescription">구매일 기준 또는 재구매 도래일 기준으로 확인합니다.</p>
+            </div>
+
+            <div id="dailyTrendControls" class="result-actions" style="align-items:flex-end; flex-wrap:wrap; gap:8px;">
+              <div style="width:190px;">
+                <label for="dailyTrendMode" style="margin-top:0;">집계 기준</label>
+                <select id="dailyTrendMode" onchange="updateDailyTrendModeGuide()">
+                  <option value="PURCHASE_DATE">구매일 기준</option>
+                  <option value="DUE_DATE">재구매 도래일 기준</option>
+                </select>
+              </div>
+
+              <div style="width:150px;">
+                <label for="dailyTrendStartDate" style="margin-top:0;">시작일</label>
+                <input id="dailyTrendStartDate" type="date">
+              </div>
+
+              <div style="width:150px;">
+                <label for="dailyTrendEndDate" style="margin-top:0;">종료일</label>
+                <input id="dailyTrendEndDate" type="date">
+              </div>
+
+              <button class="primary" onclick="dailyConversionTrend()">조회</button>
+              <button onclick="resetDailyTrendDate()">당월</button>
+            </div>
+          </div>
+
+          <div id="chartContent" class="chart-content">
+            <div class="guide-box">
+              <strong>초기 안내</strong>
+              <span id="dailyTrendModeGuide">구매일 기준: 해당 일자에 실제 구매한 고객을 첫구매/재구매만/추가구매만/재구매+추가구매로 분류합니다.</span>
+            </div>
+          </div>
+
+          <p id="chartNote" class="chart-note hidden"></p>
+        </section>
+
+        <section id="resultBox" class="result-panel hidden">
+          <div class="result-header">
+            <div>
+              <h2 id="resultTitle">조회 결과</h2>
+              <p id="resultMeta"></p>
+            </div>
+
+            <div class="result-actions">
+              <button id="downloadCsvBtn" onclick="downloadCurrentResultCsv()">CSV 다운로드</button>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table id="resultTable"></table>
+          </div>
+        </section>
+      </main>
+
+    </div>
+  </div>
+
+  <div class="loading-overlay">
+    <div class="loader"></div>
+    <p>처리 중입니다...</p>
+  </div>
+
+  <?!= include('js'); ?>
+</body>
+</html>
